@@ -208,10 +208,10 @@ def parse_silva_taxonomy_entry(taxonomy_entry: str, resolve: bool = True) -> lis
     :return: list of 7 rank entries for the taxonomy
     """
     # Example:
-    # D_0__Bacteria;D_1__Margulisbacteria;D_2__microbial mat metagenome;D_3__microbial mat metagenome;
-    # D_4__microbial mat metagenome;D_5__microbial mat metagenome;D_6__microbial mat metagenome
+    # d__Bacteria; p__Margulisbacteria; c__Margulisbacteria; o__Margulisbacteria; f__Margulisbacteria;
+    # g__Margulisbacteria; s__microbial_mat
 
-    taxonomy_split = str(taxonomy_entry).split(sep=';')
+    taxonomy_split = str(taxonomy_entry).split(sep='; ')
 
     if len(taxonomy_split) > 7:
         error = ValueError(f'Taxonomy entry is {len(taxonomy_split)} long, not 7 as expected. Full entry: '
@@ -223,9 +223,9 @@ def parse_silva_taxonomy_entry(taxonomy_entry: str, resolve: bool = True) -> lis
         for entry_index in range(len(taxonomy_split)+1, 8):
             taxonomy_split.append('')
 
-    # Remove header pieces
-    # TODO - confirm they are in the right order (0,1,2,3,4,5,6)
-    taxonomy_split = [re.sub("D_[0-6]__", "", level) for level in taxonomy_split]
+    # Remove taxonomy prefixes
+    # TODO - confirm they are in the right order (d,p,c,o,f,g,s)
+    taxonomy_split = [re.sub("[dpcofgs]__", "", level) for level in taxonomy_split]
 
     # Fill in empty parts, if they exist
     if '' in taxonomy_split and resolve is True:
@@ -268,8 +268,9 @@ def resolve_taxonomy_entry(taxonomy_split: list) -> list:
 
 
 def generate_combined_feature_table(feature_table_filepath: str, sequence_filepath: str, taxonomy_filepath: str,
-                                    normalization_method: str = None, sort_features: bool = 'False',
-                                    rename_features: bool = 'False', parse_taxonomy: bool = 'False',
+                                    normalization_method: str = None, sort_features: bool = False,
+                                    rename_features: bool = False, parse_taxonomy: bool = False,
+                                    fill_unresolved_taxonomy: bool = False,
                                     feature_id_colname: str = 'Feature ID') -> pd.DataFrame:
     """
     Loads and parses a feature table, along with optional sequence and taxonomy info, to generate a combined feature
@@ -284,6 +285,8 @@ def generate_combined_feature_table(feature_table_filepath: str, sequence_filepa
     :param sort_features: whether to sort features roughly based on abundances.
     :param rename_features: whether to rename features roughly based on abundance rank. Sort will also be performed.
     :param parse_taxonomy: whether to parse taxonomy into 7-rank taxonomy columns.
+    :param fill_unresolved_taxonomy: whether to fill in blank taxonomy ranks with Unresolved_[taxon]. Requires
+                                     parse_taxonomy to be True.
     :param feature_id_colname: name of the column where Feature IDs are stored in the output table.
     :return: a combined feature table as a pandas DataFrame.
     """
@@ -291,6 +294,12 @@ def generate_combined_feature_table(feature_table_filepath: str, sequence_filepa
     if rename_features is True:
         logger.debug('Changing sort_features to True because rename_features is True.')
         sort_features = True
+
+    if (fill_unresolved_taxonomy is True) & (parse_taxonomy is False):
+        error = ValueError(f'Setting fill_unresolved_taxonomy to True requires parse_taxonomy to be True, but '
+                           f'parse_taxonomy is "{parse_taxonomy}".')
+        logger.error(error)
+        raise error
 
     # Load the feature table
     logger.debug('Loading feature table')
@@ -307,14 +316,11 @@ def generate_combined_feature_table(feature_table_filepath: str, sequence_filepa
     # Parse taxonomy
     if parse_taxonomy is True:
         logger.debug('Parsing taxonomy into 7 ranks')
-
-        # TODO: expose 'resolve' option to user
-        taxonomy_entries_parsed = map(lambda entry: parse_silva_taxonomy_entry(entry, resolve=True),
+        taxonomy_entries_parsed = map(lambda entry: parse_silva_taxonomy_entry(entry, resolve=fill_unresolved_taxonomy),
                                       feature_table['Taxonomy'].tolist())
         taxonomy_table_parsed = pd.DataFrame(taxonomy_entries_parsed,
                                              columns=['Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus',
                                                       'Species'])
-
         # Bind to main table in place of 'Taxonomy'
         feature_table = pd.concat([feature_table, taxonomy_table_parsed], axis=1, sort=False)
         feature_table = feature_table.drop(columns='Taxonomy')
@@ -368,6 +374,12 @@ def main(args):
         logger.error(error)
         raise error
 
+    if (args.fill_unresolved_taxonomy is True) & (args.parse_taxonomy is False):
+        error = ValueError(f'Calling --fill_unresolved_taxonomy requires --parse_taxonomy to be called, but '
+                           f'--parse_taxonomy was not called.')
+        logger.error(error)
+        raise error
+
     # Startup messages
     logger.info(f'Running {os.path.basename(sys.argv[0])}')
     logger.info(f'Version: {SCRIPT_VERSION}')
@@ -380,6 +392,7 @@ def main(args):
     logger.debug(f'Sort Feature IDs roughly by relative abundance?: {args.sort_features}')
     logger.debug(f'Rename Feature IDs sequentially?: {args.rename_features}')
     logger.debug(f'Parse Silva taxonomy into 7 ranks?: {args.parse_taxonomy}')
+    logger.debug(f'Fill in blank taxonomy ranks with Unresolved_[taxon]?: {args.fill_unresolved_taxonomy}')
     logger.debug(f'Feature ID column name for the output table: {args.feature_id_colname}')
     logger.debug(f'Verbose logging: {args.verbose}')
     logger.debug('################')
@@ -391,6 +404,7 @@ def main(args):
                                                     sort_features=args.sort_features,
                                                     rename_features=args.rename_features,
                                                     parse_taxonomy=args.parse_taxonomy,
+                                                    fill_unresolved_taxonomy=args.fill_unresolved_taxonomy,
                                                     feature_id_colname=args.feature_id_colname)
     # Write output
     if args.output_feature_table == '-':
@@ -430,6 +444,9 @@ if __name__ == '__main__':
                              'Automatically sets --sort_features.')
     parser.add_argument('-P', '--parse_taxonomy', required=False, action='store_true',
                         help='Optionally parse Silva taxonomy into 7 ranks with columns "Domain", "Phylum", etc.')
+    parser.add_argument('-u', '--fill_unresolved_taxonomy', required=False, action='store_true',
+                        help='Optionally add Unresolved_[taxon] labels for blank taxonomy ranks. Requires '
+                             '--parse_taxonomy.')
     parser.add_argument('-N', '--feature_id_colname', metavar='NAME', required=False,
                         default='Feature ID',
                         help='The name of the first column of the output feature table. [Default: "Feature ID"]')
