@@ -16,6 +16,7 @@ import pandas as pd
 
 # GLOBAL VARIABLES
 SCRIPT_VERSION = '0.9.0'
+TAXONOMY_RANKS = ['Domain', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']
 
 # Set up the logger
 logging.basicConfig(format='[ %(asctime)s UTC ]: %(levelname)s: %(message)s')
@@ -68,15 +69,29 @@ def normalize_feature_table(feature_table: pd.DataFrame, normalization_method='p
 
     # TODO: make a more generic way to deal with non-sample columns, given that other functions have similar code
     # TODO: consider masking these columns and then doing normalization, followed by unmasking.
-    if ['Taxonomy', 'Sequence'] in feature_table.columns:
-        error = RuntimeError('At least one of the "Taxonomy" or "Sequence" column names is present in the table. '
-                             'Will not proceed with normalization.')
+    if any(feature_table.columns.isin(['Taxonomy', 'Sequence'] + TAXONOMY_RANKS)):
+        error = RuntimeError('At least one of the "Taxonomy" or "Sequence" column names (or a taxonomy rank column '
+                             'name) is present in the table. Will not proceed with normalization.')
         logger.error(error)
         raise error
 
     logger.debug(f"Normalizing feature table using method: {normalization_method}")
     feature_table_normalized = feature_table.set_index('Feature ID')
-    total_per_sample = feature_table.sum(axis=0)
+    total_per_sample = feature_table_normalized.sum(axis=0)
+
+    # Any samples with zero total count cannot be normalized properly, so they must be removed
+    zero_count_sample_names = []
+    for sample_name, read_total in total_per_sample.items():
+        if read_total == 0:
+            zero_count_sample_names.append(sample_name)
+
+    if len(zero_count_sample_names) > 0:
+        logger.debug(f'Removing {len(zero_count_sample_names)} samples during normalization that had zero counts: '
+                     f'{", ".join(zero_count_sample_names)}')
+        feature_table_normalized = feature_table_normalized.drop(columns=zero_count_sample_names)
+        total_per_sample = total_per_sample.drop(labels=zero_count_sample_names)
+
+    # Perform the normalization
     if normalization_method == 'proportion':
         feature_table_normalized = feature_table_normalized.div(total_per_sample)
     elif normalization_method == 'percent':
@@ -167,7 +182,7 @@ def sort_feature_table(feature_table: pd.DataFrame) -> pd.DataFrame:
     # Remove non-sample columns other than Feature ID before sorting
     # A copy of the feature table is made just in case pandas changes the main table object when these edits are made
     feature_table_masked = feature_table.copy(deep=True)
-    extraneous_non_sample_columns = ['Taxonomy', 'Sequence']
+    extraneous_non_sample_columns = ['Taxonomy', 'Sequence'] + TAXONOMY_RANKS
     for extraneous_non_sample_column in extraneous_non_sample_columns:
         if extraneous_non_sample_column in feature_table_masked.columns:
             logger.debug(f'Masking non-sample column "{extraneous_non_sample_column}" prior to sorting.')
@@ -175,7 +190,9 @@ def sort_feature_table(feature_table: pd.DataFrame) -> pd.DataFrame:
 
     logger.debug('Sorting feature table by maximum count of each feature')
     max_value_per_feature = feature_table_masked.set_index('Feature ID').max(axis=1)
+    feature_table = feature_table.set_index('Feature ID')
     feature_table[sort_column_id] = max_value_per_feature
+    feature_table = feature_table.reset_index()
     feature_table = feature_table.sort_values(by=[sort_column_id, 'Feature ID'], ascending=[False, True])
     feature_table = feature_table.drop(columns=sort_column_id)
     
@@ -289,9 +306,9 @@ def generate_combined_feature_table(feature_table_filepath: str, sequence_filepa
 
     # Parse taxonomy
     if parse_taxonomy is True:
-        logger.info('Parsing taxonomy into 7 ranks')
+        logger.debug('Parsing taxonomy into 7 ranks')
 
-        # TODO - expose 'resolve' option to user
+        # TODO: expose 'resolve' option to user
         taxonomy_entries_parsed = map(lambda entry: parse_silva_taxonomy_entry(entry, resolve=True),
                                       feature_table['Taxonomy'].tolist())
         taxonomy_table_parsed = pd.DataFrame(taxonomy_entries_parsed,
@@ -312,13 +329,13 @@ def generate_combined_feature_table(feature_table_filepath: str, sequence_filepa
 
     # Rename Feature IDs
     if rename_features is True:
-        logger.info('Renaming feature IDs sequentially')
+        logger.debug('Renaming feature IDs sequentially')
         num_rows = feature_table.shape[0]
         feature_table['Feature ID'] = range(num_rows)
 
     # Change first column to that desired by user
     if feature_id_colname != 'Feature ID':
-        logger.info('Changing "Feature ID" colname to "' + feature_id_colname + '"')
+        logger.debug('Changing "Feature ID" colname to "' + feature_id_colname + '"')
         feature_table = feature_table.rename(columns={'Feature ID': feature_id_colname})
 
     return feature_table
@@ -404,19 +421,19 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output_feature_table', metavar='TSV', required=False, default='-',
                         help='The path to the output TSV feature table. Will write to STDOUT (-) if nothing is '
                              'provided.')
-    parser.add_argument('-p', '--percent', metavar='BOOL', required=False, action='store_true',
+    parser.add_argument('-p', '--percent', required=False, action='store_true',
                         help='Optionally normalize to percent relative abundances for each sample.')
-    parser.add_argument('-S', '--sort_features', metavar='BOOL', required=False, action='store_true',
+    parser.add_argument('-S', '--sort_features', required=False, action='store_true',
                         help='Optionally sort Feature IDs roughly based on overall abundance.')
-    parser.add_argument('-R', '--rename_features', metavar='BOOL', required=False, action='store_true',
+    parser.add_argument('-R', '--rename_features', required=False, action='store_true',
                         help='Optionally rename the Feature IDs sequentially, roughly based on overall abundance. '
                              'Automatically sets --sort_features.')
-    parser.add_argument('-P', '--parse_taxonomy', metavar='BOOL', required=False, action='store_true',
+    parser.add_argument('-P', '--parse_taxonomy', required=False, action='store_true',
                         help='Optionally parse Silva taxonomy into 7 ranks with columns "Domain", "Phylum", etc.')
     parser.add_argument('-N', '--feature_id_colname', metavar='NAME', required=False,
                         default='Feature ID',
                         help='The name of the first column of the output feature table. [Default: "Feature ID"]')
-    parser.add_argument('-v', '--verbose', metavar='BOOL', required=False, action='store_true',
+    parser.add_argument('-v', '--verbose', required=False, action='store_true',
                         help='Enable for verbose logging.')
     # TODO - add option to auto-detect if a QZA file is provided instead of the unpackaged file. Deal with the
     #  conversions. Same for if a BIOM file is provided.
