@@ -51,7 +51,7 @@ This script is nice if trying to decide how to rarefy your data, for example.
 
 #### Dependencies
 - python >= 3
-- pandas = 0.24
+- pandas >= 2
 - biom-format = 2.1
 - h5py = 2.9
 
@@ -60,7 +60,7 @@ First, add the script to your `PATH`.
 Then, install all dependencies. If using conda:
 ```bash
 conda create -n summarize_sample_counts -c conda-forge -c bioconda \
-  python=3 pandas=0.24 biom-format=2.1 h5py=2.9
+  python=3 pandas=2 biom-format=2.1 h5py=2.9
 
 conda activate summarize_sample_counts
 ```
