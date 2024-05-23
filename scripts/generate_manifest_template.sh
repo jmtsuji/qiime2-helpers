@@ -5,7 +5,7 @@
 # Part of the AXIOME3 project
 
 SCRIPT_NAME=${0##*/}
-SCRIPT_VERSION="0.8.0"
+SCRIPT_VERSION="0.9.0"
 
 # Print help statement
 if [[ $# -lt 1 ]]; then
