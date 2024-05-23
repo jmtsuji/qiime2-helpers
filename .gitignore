@@ -1,3 +1,4 @@
 .Rhistory
 .idea
 .snakemake
+.DS_Store
