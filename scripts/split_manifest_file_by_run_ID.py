@@ -13,7 +13,7 @@ import argparse
 import pandas as pd
 
 # GLOBAL VARIABLES
-SCRIPT_VERSION = '0.8.0'
+SCRIPT_VERSION = '0.9.0'
 
 # Set up the logger
 logging.basicConfig(level=logging.INFO, format="[ %(asctime)s UTC ]: %(levelname)s: %(module)s: %(message)s")

@@ -17,7 +17,7 @@ import zipfile as zf
 import pandas as pd
 
 # GLOBAL variables
-SCRIPT_VERSION = '0.8.1'
+SCRIPT_VERSION = '0.9.0'
 BIOM_PATH_PARTIAL = 'data/feature-table.biom' # biom file location within the unzipped QZA file
 
 # Set up the logger
