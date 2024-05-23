@@ -23,7 +23,7 @@ logging.Formatter.converter = time.gmtime
 logger = logging.getLogger(__name__)
 
 
-def load_feature_table(feature_table_filepath: str):
+def load_feature_table(feature_table_filepath: str) -> pd.DataFrame:
     """
     Read a QIIME2 feature table
 
@@ -51,7 +51,46 @@ def load_feature_table(feature_table_filepath: str):
     return feature_table
 
 
-def add_taxonomy_to_feature_table(feature_table: pd.DataFrame, taxonomy_filepath: str):
+def normalize_feature_table(feature_table: pd.DataFrame, normalization_method='percent') -> pd.DataFrame:
+    """
+    Normalize a feature table (e.g., of counts) per sample.
+
+    :param feature_table: QIIME2 FeatureTable[Frequency] artifact loaded as a pandas DataFrame
+    :param normalization_method: method for normalization. Can choose 'percent' or 'proportion' currently.
+    :return: QIIME2 FeatureTable[Frequency] artifact (pandas DataFrame) with normalized feature abundances
+    """
+    normalization_methods = ['percent', 'proportion']
+    if normalization_method not in normalization_methods:
+        error = ValueError(f'Input normalization method "{normalization_method}" is not one of the available '
+                           f'normalization methods: "{",".join(normalization_methods)}".')
+        logger.error(error)
+        raise error
+
+    # TODO: make a more generic way to deal with non-sample columns, given that other functions have similar code
+    # TODO: consider masking these columns and then doing normalization, followed by unmasking.
+    if ['Taxonomy', 'Sequence'] in feature_table.columns:
+        error = RuntimeError('At least one of the "Taxonomy" or "Sequence" column names is present in the table. '
+                             'Will not proceed with normalization.')
+        logger.error(error)
+        raise error
+
+    logger.debug(f"Normalizing feature table using method: {normalization_method}")
+    feature_table_normalized = feature_table.set_index('Feature ID')
+    total_per_sample = feature_table.sum(axis=0)
+    if normalization_method == 'proportion':
+        feature_table_normalized = feature_table_normalized.div(total_per_sample)
+    elif normalization_method == 'percent':
+        feature_table_normalized = feature_table_normalized.div(total_per_sample).multiply(100)
+    else:
+        # This in theory should never be called, because the error should be caught above.
+        raise ValueError()
+
+    feature_table_normalized = feature_table_normalized.reset_index()
+
+    return feature_table_normalized
+
+
+def add_taxonomy_to_feature_table(feature_table: pd.DataFrame, taxonomy_filepath: str) -> pd.DataFrame:
     """
     Adds taxonomy values as the Taxonomy column to a QIIME2 feature table
 
@@ -77,7 +116,7 @@ def add_taxonomy_to_feature_table(feature_table: pd.DataFrame, taxonomy_filepath
     return feature_table
 
 
-def add_sequences_to_feature_table(feature_table: pd.DataFrame, seq_filepath: str):
+def add_sequences_to_feature_table(feature_table: pd.DataFrame, seq_filepath: str) -> pd.DataFrame:
     """
     Adds ASV/OTU sequences as the Sequence column to a QIIME2 feature table
 
@@ -108,7 +147,7 @@ def add_sequences_to_feature_table(feature_table: pd.DataFrame, seq_filepath: st
     return feature_table
 
 
-def sort_feature_table(feature_table: pd.DataFrame):
+def sort_feature_table(feature_table: pd.DataFrame) -> pd.DataFrame:
     """
     Roughly sorts a QIIME2 feature table by abundances of Features. The sort is performed based on the maximum
     count (or percent abundance) per feature.
@@ -143,7 +182,7 @@ def sort_feature_table(feature_table: pd.DataFrame):
     return feature_table
 
 
-def parse_silva_taxonomy_entry(taxonomy_entry: str, resolve: bool = True):
+def parse_silva_taxonomy_entry(taxonomy_entry: str, resolve: bool = True) -> list:
     """
     Parse a single Silva taxonomy entry
 
@@ -178,7 +217,7 @@ def parse_silva_taxonomy_entry(taxonomy_entry: str, resolve: bool = True):
     return taxonomy_split
 
 
-def resolve_taxonomy_entry(taxonomy_split: list):
+def resolve_taxonomy_entry(taxonomy_split: list) -> list:
     """
     Fills in blank taxonomy entries in a list of taxonomy entries
 
@@ -212,8 +251,9 @@ def resolve_taxonomy_entry(taxonomy_split: list):
 
 
 def generate_combined_feature_table(feature_table_filepath: str, sequence_filepath: str, taxonomy_filepath: str,
-                                    feature_id_colname: str = 'Feature ID', sort_features: bool = 'False',
-                                    rename_features: bool = 'False', parse_taxonomy: bool = 'False') -> pd.DataFrame:
+                                    normalization_method: str = None, sort_features: bool = 'False',
+                                    rename_features: bool = 'False', parse_taxonomy: bool = 'False',
+                                    feature_id_colname: str = 'Feature ID') -> pd.DataFrame:
     """
     Loads and parses a feature table, along with optional sequence and taxonomy info, to generate a combined feature
     table. Optionally parses taxonomy, sorts features, and renames features.
@@ -222,10 +262,12 @@ def generate_combined_feature_table(feature_table_filepath: str, sequence_filepa
                                    artifact exported as TSV.
     :param sequence_filepath: path to the dna-sequences.fasta output by QIIME2.
     :param taxonomy_filepath: path to the taxonomy.tsv output by QIIME2.
-    :param feature_id_colname: name of the column where Feature IDs are stored in the output table.
+    :param normalization_method: set to 'percent' or 'proportion' to normalize the table to percent or proportion
+                                 relative abundance, per sample. If None, no normalization is performed.
     :param sort_features: whether to sort features roughly based on abundances.
     :param rename_features: whether to rename features roughly based on abundance rank. Sort will also be performed.
     :param parse_taxonomy: whether to parse taxonomy into 7-rank taxonomy columns.
+    :param feature_id_colname: name of the column where Feature IDs are stored in the output table.
     :return: a combined feature table as a pandas DataFrame.
     """
     # Set sort_features to True if rename_features is True
@@ -236,6 +278,10 @@ def generate_combined_feature_table(feature_table_filepath: str, sequence_filepa
     # Load the feature table
     logger.debug('Loading feature table')
     feature_table = load_feature_table(feature_table_filepath)
+
+    # Normalize
+    if normalization_method is not None:
+        feature_table = normalize_feature_table(feature_table, normalization_method)
 
     # Add taxonomy
     if taxonomy_filepath is not None:
@@ -288,6 +334,13 @@ def main(args):
     else:
         logger.setLevel(logging.INFO)
 
+    # Set the normalization method
+    if args.percent is True:
+        # TODO: consider exposing other normalization methods to the user
+        normalization_method = 'percent'
+    else:
+        normalization_method = None
+
     # Set sort_features to True if rename_features is True
     if args.rename_features is True:
         args.sort_features = True
@@ -306,20 +359,22 @@ def main(args):
     logger.debug(f'Representative sequences filepath: {args.sequences}')
     logger.debug(f'Taxonomy filepath: {args.taxonomy}')
     logger.debug(f'Output table filepath: {args.output_feature_table}')
-    logger.debug(f'Feature ID column name: {args.feature_id_colname}')
+    logger.debug(f'Convert to percent relative abundances?: {args.percent}')
     logger.debug(f'Sort Feature IDs roughly by relative abundance?: {args.sort_features}')
     logger.debug(f'Rename Feature IDs sequentially?: {args.rename_features}')
     logger.debug(f'Parse Silva taxonomy into 7 ranks?: {args.parse_taxonomy}')
+    logger.debug(f'Feature ID column name for the output table: {args.feature_id_colname}')
     logger.debug(f'Verbose logging: {args.verbose}')
     logger.debug('################')
 
     feature_table = generate_combined_feature_table(feature_table_filepath=args.feature_table,
                                                     sequence_filepath=args.sequences,
                                                     taxonomy_filepath=args.taxonomy,
-                                                    feature_id_colname=args.feature_id_colname,
+                                                    normalization_method=normalization_method,
                                                     sort_features=args.sort_features,
                                                     rename_features=args.rename_features,
-                                                    parse_taxonomy=args.parse_taxonomy)
+                                                    parse_taxonomy=args.parse_taxonomy,
+                                                    feature_id_colname=args.feature_id_colname)
     # Write output
     if args.output_feature_table == '-':
         # Write to STDOUT
@@ -349,9 +404,8 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output_feature_table', metavar='TSV', required=False, default='-',
                         help='The path to the output TSV feature table. Will write to STDOUT (-) if nothing is '
                              'provided.')
-    parser.add_argument('-N', '--feature_id_colname', metavar='NAME', required=False,
-                        default='Feature ID',
-                        help='The name of the first column of the output feature table. [Default: "Feature ID"]')
+    parser.add_argument('-p', '--percent', metavar='BOOL', required=False, action='store_true',
+                        help='Optionally normalize to percent relative abundances for each sample.')
     parser.add_argument('-S', '--sort_features', metavar='BOOL', required=False, action='store_true',
                         help='Optionally sort Feature IDs roughly based on overall abundance.')
     parser.add_argument('-R', '--rename_features', metavar='BOOL', required=False, action='store_true',
@@ -359,6 +413,9 @@ if __name__ == '__main__':
                              'Automatically sets --sort_features.')
     parser.add_argument('-P', '--parse_taxonomy', metavar='BOOL', required=False, action='store_true',
                         help='Optionally parse Silva taxonomy into 7 ranks with columns "Domain", "Phylum", etc.')
+    parser.add_argument('-N', '--feature_id_colname', metavar='NAME', required=False,
+                        default='Feature ID',
+                        help='The name of the first column of the output feature table. [Default: "Feature ID"]')
     parser.add_argument('-v', '--verbose', metavar='BOOL', required=False, action='store_true',
                         help='Enable for verbose logging.')
     # TODO - add option to auto-detect if a QZA file is provided instead of the unpackaged file. Deal with the
