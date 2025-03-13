@@ -3,6 +3,8 @@ Repo with helper scripts for QIIME2 analyses
 
 All scripts can be run through the Linux command line.
 
+**Note: this repo is deprecated in favour of [ampliwrangler](https://github.com/jmtsuji/ampliwrangler).**
+
 ## Contents
 
 ### `generate_combined_feature_table.py`
